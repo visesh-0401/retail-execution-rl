@@ -101,6 +101,55 @@ def test_gpu_preload():
         return False
 
 
+def test_multi_gpu():
+    """Test multi-GPU data replication."""
+    print("\n" + "="*70)
+    print("TEST 3: Multi-GPU Data Replication")
+    print("="*70)
+    
+    data_map = {
+        'AAPL': create_sample_data(5),
+        'MSFT': create_sample_data(5),
+    }
+    
+    try:
+        import torch
+        num_gpus = torch.cuda.device_count()
+        
+        if num_gpus < 2:
+            print(f"⊘ Only {num_gpus} GPU(s) available, skipping multi-GPU test")
+            print(f"  (This test requires 2+ GPUs)")
+            return True  # Not a failure, just N/A
+        
+        print(f"\n✓ Detected {num_gpus} GPUs")
+        
+        # Use only first 2 GPUs for testing
+        loader = GPUDataLoader(data_map, use_gpu=True, verbose=False)
+        
+        # Should have auto-detected GPUs
+        print(f"  Data loader configured for {len(loader.devices)} device(s)")
+        
+        # Load data with multi-GPU
+        gpu_data_list = loader.to_device_distributed()
+        
+        print(f"  Data replicated to {len(gpu_data_list)} device(s)")
+        
+        # Verify each GPU has data
+        for idx, gpu_data in enumerate(gpu_data_list):
+            assert 'AAPL' in gpu_data, f"GPU {idx}: AAPL not found"
+            assert 'MSFT' in gpu_data, f"GPU {idx}: MSFT not found"
+            print(f"  ✓ GPU {idx}: Data verified")
+        
+        print("✓ Multi-GPU replication works")
+        return True
+    
+    except Exception as e:
+        print(f"✗ Multi-GPU test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def test_environment_with_gpu():
     """Test environment with GPU-preloaded data."""
     print("\n" + "="*70)
@@ -156,6 +205,7 @@ def main():
     results['cpu'] = test_cpu_path()
     results['gpu'] = test_gpu_preload()
     results['env'] = test_environment_with_gpu()
+    results['multi_gpu'] = test_multi_gpu()
     
     # Summary
     print("\n" + "="*70)

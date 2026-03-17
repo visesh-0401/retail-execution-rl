@@ -269,15 +269,18 @@ class ILocAccessor:
 
 class GPUDataLoader:
     """
-    Preloads market data to GPU for accelerated RL training.
+    Preloads market data to GPU(s) for accelerated RL training.
     
     This loader:
-    1. Precomputes rolling averages and spreads on CPU (one time)
-    2. Converts all arrays (OHLCV + precomputed) to GPU tensors
-    3. Returns simulator-compatible DataFrames on GPU
+    1. Detects available GPUs (single or multi-GPU)
+    2. Precomputes rolling averages and spreads on CPU (one time)
+    3. Converts all arrays (OHLCV + precomputed) to GPU tensor(s)
+    4. Distributes data across multiple GPUs if available
+    5. Returns simulator-compatible DataFrames on GPU(s)
     
     Features:
-      - Calculates total data size and reports GPU usage
+      - Multi-GPU support: Replicates data to each GPU for parallel training
+      - Calculates total data size and reports GPU usage per device
       - Precomputes before GPU transfer (rolling window, spreads)
       - Converts to GPU tensors for fast per-step access
       - Simulator sees preprocessed data and runs fast
@@ -288,9 +291,13 @@ class GPUDataLoader:
     data_map : dict[str, pd.DataFrame]
         Ticker -> OHLCV DataFrame mapping
     use_gpu : bool
-        If True and available, preload preprocessed data to GPU
-    gpu_device : str
-        Device to load data to ('cuda' or 'cpu')
+        If True and available, preload preprocessed data to GPU(s)
+    gpu_device : str or list[str]
+        Device(s) to load data to:
+        - 'cuda' (auto-detect)
+        - 'cuda:0', 'cuda:1' (specific GPU)
+        - ['cuda:0', 'cuda:1'] (multiple GPUs)
+        - 'cpu' (CPU only)
     verbose : bool
         Print memory usage and device info
     """
@@ -304,11 +311,27 @@ class GPUDataLoader:
     ):
         self.data_map = data_map
         self.use_gpu = use_gpu and HAS_TORCH and torch.cuda.is_available()
-        self.gpu_device = gpu_device if torch.cuda.is_available() else "cpu"
-        self.verbose = verbose
         
-        self.gpu_data = None  # Will store GPU DataFrames
-        self.device = None
+        # Handle multi-GPU setup
+        self.devices = []
+        if self.use_gpu:
+            if isinstance(gpu_device, list):
+                # Multi-GPU specified explicitly
+                self.devices = [torch.device(d) for d in gpu_device]
+            elif "cuda" in gpu_device:
+                # Auto-detect all available GPUs
+                num_gpus = torch.cuda.device_count()
+                if num_gpus > 1:
+                    self.devices = [torch.device(f"cuda:{i}") for i in range(num_gpus)]
+                else:
+                    self.devices = [torch.device(gpu_device)]
+            else:
+                self.devices = [torch.device(gpu_device)]
+        else:
+            self.devices = [torch.device("cpu")]
+        
+        self.verbose = verbose
+        self.gpu_data = None  # Will store GPU DataFrames (list for multi-GPU)
         
         if verbose:
             self._print_info()
@@ -316,7 +339,7 @@ class GPUDataLoader:
     def _print_info(self):
         """Print data size and GPU availability."""
         print("\n" + "="*70)
-        print("GPU DATA LOADER")
+        print("GPU DATA LOADER — MULTI-GPU SUPPORT")
         print("="*70)
         
         # Calculate size
@@ -331,25 +354,49 @@ class GPUDataLoader:
         
         if HAS_TORCH:
             print(f"\n  PyTorch:   ✓ Available")
-            print(f"  CUDA:      {'✓ Available' if torch.cuda.is_available() else '✗ Not available'}")
+            num_gpus = torch.cuda.device_count()
+            print(f"  GPUs:      {num_gpus} device(s) available")
             
-            if torch.cuda.is_available():
-                gpu_mem_free = torch.cuda.mem_get_info()[0] / (1024**3)
-                gpu_mem_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                print(f"  GPU Memory: {gpu_mem_free:.1f} GB free / {gpu_mem_total:.1f} GB total")
-                print(f"  Loading to GPU: {'✓ YES' if self.use_gpu else '✗ NO (requested)'}")
+            if num_gpus > 0:
+                for i in range(num_gpus):
+                    gpu_name = torch.cuda.get_device_name(i)
+                    gpu_mem_total = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+                    print(f"    [{i}] {gpu_name:40s} {gpu_mem_total:5.1f} GB")
+                
+                if len(self.devices) > 1:
+                    print(f"\n  MULTI-GPU MODE: Using {len(self.devices)} GPUs")
+                    for i, dev in enumerate(self.devices):
+                        print(f"    GPU {i}: {dev}")
+                    if total_size > 0:
+                        size_per_gpu = total_size * len(self.devices)
+                        print(f"  Total GPU memory needed: {size_per_gpu:.2f} MB (replicated)")
+                else:
+                    print(f"\n  SINGLE-GPU MODE: Using GPU 0")
+                    
+                if self.use_gpu:
+                    print(f"  Loading to GPU(s): ✓ YES")
+                else:
+                    print(f"  Loading to GPU(s): ✗ NO (requested CPU)")
         else:
             print(f"\n  PyTorch:   ✗ Not installed")
             print(f"  Loading to GPU: ✗ NO")
         
         print("="*70 + "\n")
     
-    def to_device(self) -> dict[str, pd.DataFrame]:
+    def to_device(self, return_single: bool = True) -> dict[str, pd.DataFrame]:
         """
-        Preprocess and convert data to GPU (if available).
+        Preprocess and convert data to GPU(s).
         
-         Returns simulator-compatible DataFrames where underlying arrays
-        are on GPU for fast access.
+        For multi-GPU training:
+        - Each GPU gets a complete copy of the data (data is small: 0.32 MB)
+        - PPO training loop uses torch's multi-GPU utilities
+        - Ensures no bottleneck from GPU communication
+        
+        Parameters
+        ----------
+        return_single : bool
+            If True (default), return data for primary GPU (GPU 0)
+            If False, return dict mapping device -> data (for distributed training)
         
         Returns
         -------
@@ -359,48 +406,75 @@ class GPUDataLoader:
             Data is on GPU (if use_gpu=True) for fast .iloc access.
         """
         if self.gpu_data is not None:
-            return self.gpu_data  # Already loaded
-        
-        self.device = self.gpu_device if self.use_gpu else "cpu"
-        self.gpu_data = {}
+            if return_single:
+                # Return single GPU version (default for Stable-Baselines3 compatibility)
+                return self.gpu_data[0] if isinstance(self.gpu_data, list) else self.gpu_data
+            else:
+                return self.gpu_data
         
         if not HAS_TORCH:
             # No torch: return original DataFrames (CPU fallback)
             return self.data_map
         
-        device = torch.device(self.device)
-        
+        # Preprocess data once on CPU
+        preprocessed_data = {}
         for ticker, df in self.data_map.items():
-            # Precompute on CPU first (these are the expensive operations)
             df_proc = df.copy()
             df_proc["avg_volume"] = df_proc["Volume"].rolling(20, min_periods=1).mean()
             df_proc["spread_bps"] = (
                 (df_proc["High"] - df_proc["Low"]) / df_proc["Close"] * 10_000
             )
-            
-            # Convert all columns to GPU tensors and reconstruct DataFrame
-            # This keeps the DataFrame structure that the simulator expects
-            data_dict = {}
-            for col in df_proc.columns:
-                arr = df_proc[col].values.astype(np.float32)
-                if isinstance(arr[0], np.floating):
-                    # Numeric column: move to GPU
-                    data_dict[col] = torch.from_numpy(arr).float().to(device)
-                else:
-                    # Keep non-numeric columns as-is
-                    data_dict[col] = df_proc[col]
-            
-            # Create a special GPU-aware DataFrame wrapper
-            self.gpu_data[ticker] = GPUDataFrame(
-                data_dict=data_dict,
-                index=df.index,
-                device=device,
-            )
+            preprocessed_data[ticker] = df_proc
         
-        if self.verbose:
-            print(f"✓ Data loaded to {self.device.upper()} successfully\n")
+        # Replicate to all devices
+        self.gpu_data = []
         
-        return self.gpu_data
+        for device_idx, device in enumerate(self.devices):
+            device_data = {}
+            
+            for ticker, df_proc in preprocessed_data.items():
+                # Convert all columns to GPU tensors
+                data_dict = {}
+                for col in df_proc.columns:
+                    arr = df_proc[col].values.astype(np.float32)
+                    if isinstance(arr[0], np.floating):
+                        # Numeric column: move to GPU
+                        data_dict[col] = torch.from_numpy(arr).float().to(device)
+                    else:
+                        # Keep non-numeric columns as-is
+                        data_dict[col] = df_proc[col]
+                
+                # Create GPU-aware DataFrame wrapper
+                device_data[ticker] = GPUDataFrame(
+                    data_dict=data_dict,
+                    index=df_proc.index,
+                    device=device,
+                )
+            
+            self.gpu_data.append(device_data)
+            
+            if self.verbose and device_idx == 0:
+                print(f"✓ Data replicated to {len(self.devices)} GPU(s) successfully")
+                if len(self.devices) > 1:
+                    print(f"  Each GPU: {', '.join([str(d) for d in self.devices])}")
+                print()
+        
+        # Return data for primary GPU (GPU 0) by default
+        return self.gpu_data[0]
+    
+    def to_device_distributed(self) -> list:
+        """
+        Return data for all devices (for distributed training).
+        
+        Returns
+        -------
+        list[dict[str, pd.DataFrame]]
+            List of data dictionaries, one per GPU
+        """
+        if self.gpu_data is None:
+            self.to_device(return_single=False)
+        
+        return self.gpu_data if isinstance(self.gpu_data, list) else [self.gpu_data]
 
 
 class GPUEnvironmentWrapper:

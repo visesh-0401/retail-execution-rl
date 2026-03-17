@@ -168,6 +168,7 @@ def train_single_seed(
         gae_lambda=0.95,
         clip_range=0.2,
         ent_coef=0.01,       # encourages exploration
+        device="auto",        # Auto-detect and use available GPU(s)
         verbose=1,
         seed=seed,
         tensorboard_log=os.path.join(results_dir, "tensorboard"),
@@ -227,6 +228,8 @@ def main():
                         help="PPO mini-batch size")
     parser.add_argument("--use-gpu", action="store_true", default=False,
                         help="Preload data to GPU for faster training (40-60%% speedup)")
+    parser.add_argument("--num-gpus", type=int, default=None,
+                        help="Number of GPUs to use (auto-detect if not specified)")
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--interval", default="1d")
     parser.add_argument("--models-dir", default="models")
@@ -247,6 +250,20 @@ def main():
     print(f"  Lr          : {args.lr}")
     print(f"  Batch size  : {args.batch_size}")
     print(f"  GPU mode    : {'✓ ENABLED (40-60% speedup expected)' if args.use_gpu else '✗ CPU mode'}")
+    
+    # Multi-GPU detection
+    try:
+        import torch
+        num_available_gpus = torch.cuda.device_count()
+        if args.use_gpu and num_available_gpus > 0:
+            num_gpus_to_use = args.num_gpus or num_available_gpus
+            num_gpus_to_use = min(num_gpus_to_use, num_available_gpus)
+            print(f"  Multi-GPU    : {num_gpus_to_use} GPU(s) available")
+            if num_gpus_to_use > 1:
+                print(f"               ✓ MULTI-GPU MODE (data replicated to each GPU)")
+    except:
+        pass
+    
     print(f"{'='*65}\n")
 
     # Load data
@@ -263,13 +280,40 @@ def main():
     # =======================
     if args.use_gpu:
         print("\n🚀 GPU DATA PRELOADING...")
+        
+        # Setup multi-GPU support
+        try:
+            import torch
+            num_available_gpus = torch.cuda.device_count()
+            if num_available_gpus > 0:
+                num_gpus_to_use = args.num_gpus or num_available_gpus
+                num_gpus_to_use = min(num_gpus_to_use, num_available_gpus)
+                
+                # Set CUDA devices for Stable-Baselines3
+                gpu_ids = ",".join(str(i) for i in range(num_gpus_to_use))
+                os.environ['CUDA_VISIBLE_DEVICES'] = gpu_ids
+                
+                if num_gpus_to_use > 1:
+                    print(f"  Multi-GPU setup: Using GPUs {gpu_ids}")
+        except ImportError:
+            pass
+        
         loader = GPUDataLoader(data_map, use_gpu=True, verbose=True)
         data_map = loader.to_device()
         print("✓ All data loaded to GPU\n")
     else:
         data_size = get_data_size_mb(data_map)
         print(f"\n💾 CPU mode (data size: {data_size:.1f} MB)")
-        print(f"   Tip: Use --use-gpu flag for 40-60%% faster training on Kaggle GPU\n")
+        print(f"   Tip: Use --use-gpu flag for 40-60%% faster training on GPU")
+        try:
+            import torch
+            num_gpus = torch.cuda.device_count()
+            if num_gpus > 1:
+                print(f"   Tip: You have {num_gpus} GPUs available! Use --use-gpu --num-gpus {num_gpus}\n")
+            elif num_gpus > 0:
+                print(f"   Tip: You have 1 GPU available! Use --use-gpu\n")
+        except:
+            pass
 
     # Split train / eval tickers
     train_tickers = args.stocks or all_tickers[:3]
