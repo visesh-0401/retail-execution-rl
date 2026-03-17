@@ -97,6 +97,7 @@ os.chdir('/kaggle/working/retail-execution-rl')
 # Set environment for Kaggle
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['PYTHONPATH'] = '.'  # ← FIX: Add current directory to Python path
 
 # Run training with GPU preloading
 os.system(
@@ -340,7 +341,7 @@ COMMANDS SUMMARY (COPY-PASTE READY)
 cd retail-execution-rl && \
 pip install -q stable-baselines3[extra] gymnasium pandas numpy torch scikit-learn && \
 python scripts/01_download_data.py --stocks AAPL MSFT --months 6 -v && \
-python scripts/04_train_ppo.py --use-gpu --timesteps 50000 --seeds 42 43 44 45 46 --stocks AAPL MSFT --eval-stocks TSLA SPY QQQ
+PYTHONPATH=. python scripts/04_train_ppo.py --use-gpu --timesteps 50000 --seeds 42 43 44 45 46 --stocks AAPL MSFT --eval-stocks TSLA SPY QQQ
 
 
 DOCUMENTATION LINKS
