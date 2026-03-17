@@ -93,6 +93,10 @@ def train_single_seed(
     models_dir: str,
     results_dir: str,
     use_gpu: bool = False,
+    entropy_coef: float = 0.01,
+    gamma: float = 0.99,
+    gae_lambda: float = 0.95,
+    clip_range: float = 0.2,
 ) -> dict:
     """Train one PPO run with a single seed. Returns eval metrics.
     
@@ -164,10 +168,10 @@ def train_single_seed(
         n_steps=2048,
         batch_size=batch_size,
         n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.01,       # encourages exploration
+        gamma=gamma,
+        gae_lambda=gae_lambda,
+        clip_range=clip_range,
+        ent_coef=entropy_coef,       # encourages exploration
         device="auto",        # Auto-detect and use available GPU(s)
         verbose=1,
         seed=seed,
@@ -226,6 +230,14 @@ def main():
                         help="PPO learning rate (proposal default: 3e-4)")
     parser.add_argument("--batch-size", type=int, default=64,
                         help="PPO mini-batch size")
+    parser.add_argument("--entropy-coef", type=float, default=0.01,
+                        help="Entropy coefficient for exploration (default: 0.01)")
+    parser.add_argument("--gamma", type=float, default=0.99,
+                        help="Discount factor for long-term credit (default: 0.99)")
+    parser.add_argument("--gae-lambda", type=float, default=0.95,
+                        help="GAE lambda for variance reduction (default: 0.95)")
+    parser.add_argument("--clip-range", type=float, default=0.2,
+                        help="Policy clip range for PPO update (default: 0.2)")
     parser.add_argument("--use-gpu", action="store_true", default=False,
                         help="Preload data to GPU for faster training (40-60%% speedup)")
     parser.add_argument("--num-gpus", type=int, default=None,
@@ -249,6 +261,10 @@ def main():
     print(f"  Qty         : {args.qty} shares")
     print(f"  Lr          : {args.lr}")
     print(f"  Batch size  : {args.batch_size}")
+    print(f"  Entropy coef: {args.entropy_coef}")
+    print(f"  Gamma       : {args.gamma}")
+    print(f"  GAE lambda  : {args.gae_lambda}")
+    print(f"  Clip range  : {args.clip_range}")
     print(f"  GPU mode    : {'✓ ENABLED (40-60% speedup expected)' if args.use_gpu else '✗ CPU mode'}")
     
     # Multi-GPU detection
@@ -339,6 +355,10 @@ def main():
             models_dir=args.models_dir,
             results_dir=args.results_dir,
             use_gpu=args.use_gpu,
+            entropy_coef=args.entropy_coef,
+            gamma=args.gamma,
+            gae_lambda=args.gae_lambda,
+            clip_range=args.clip_range,
         )
         if result:
             all_results.append(result)

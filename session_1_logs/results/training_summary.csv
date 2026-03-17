@@ -1,0 +1,6 @@
+seed,mean_reward,std_reward,run_id,model_path
+42,-73.0186272,26.76582269806866,ppo_ratelimit5_seed42,models/ppo_ratelimit5_seed42_final.zip
+43,-90.43219445,42.01953733289951,ppo_ratelimit5_seed43,models/ppo_ratelimit5_seed43_final.zip
+44,-77.89886585,34.85303636254448,ppo_ratelimit5_seed44,models/ppo_ratelimit5_seed44_final.zip
+45,-88.93391774999998,41.075416525302366,ppo_ratelimit5_seed45,models/ppo_ratelimit5_seed45_final.zip
+46,-79.51413035,33.48223605328872,ppo_ratelimit5_seed46,models/ppo_ratelimit5_seed46_final.zip
