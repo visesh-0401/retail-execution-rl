@@ -64,7 +64,7 @@ STEP 4: Test Data Loading
 ```python
 # Quick sanity check
 os.chdir('/kaggle/working/retail-execution-rl')
-os.system('python scripts/01_download_data.py --stocks AAPL MSFT --months 6 -v')
+os.system('python scripts/01_download_data.py --stocks AAPL MSFT')
 ```
 
 Expected time: ~30 seconds
@@ -340,7 +340,7 @@ COMMANDS SUMMARY (COPY-PASTE READY)
 !git clone https://github.com/visesh-0401/retail-execution-rl.git && \
 cd retail-execution-rl && \
 pip install -q stable-baselines3[extra] gymnasium pandas numpy torch scikit-learn && \
-python scripts/01_download_data.py --stocks AAPL MSFT --months 6 -v && \
+python scripts/01_download_data.py --stocks AAPL MSFT && \
 PYTHONPATH=. python scripts/04_train_ppo.py --use-gpu --timesteps 50000 --seeds 42 43 44 45 46 --stocks AAPL MSFT --eval-stocks TSLA SPY QQQ
 
 
